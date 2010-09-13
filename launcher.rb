@@ -286,13 +286,13 @@ module Launcher
               # Select browser
               case @browser
                 when :chrome
-                  unless(defined?(Chromer))
-                    require_relative "chromer.rb"
+                  # TODO use chromer
+                  tries = ["chromium", "iron", "chrome"]
+                  begin
+                    system("#{tries.shift} %s" % [ @candidate.to_s ]) or raise "Chrome Browser not found"
+                  rescue
+                    retry unless tries.empty?
                   end
-
-                  chromer = Chromer.new
-                  chromer.open(@candidate.to_s)
-                  chromer.close
                 when :firefox
                   system("firefox -new-tab '%s'" % [ @candidate.to_s ])
                 when :opera
