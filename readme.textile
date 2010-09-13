@@ -1,0 +1,23 @@
+h1. Launcher
+
+Launcher that combines the fancy stuff of "subtle":http://subtle.subforge.org and a browser search bar.
+
+{{lightbox(contrib/launcher, Launcher)}}
+
+h2. Features
+
+* Search for stuff via "Google":http://www.google.com (Chrome/Opera/Firefox)
+* Point your browser directly to an uri
+* Launch programs in path
+* Create tags on the fly with *#tag*
+* Create views on the fly with *@view*
+* Tab completion for programs, views and tags
+
+h2. Examples
+
+|_. Insert             |_. Description                                                |
+| subtle wm            | Change to browser view and search for _subtle wm_ via google |
+| http://subforge.org  | Change to browser view and open new tab in browser           |
+| urxvt @editor        | Open urxvt on view @editor with dummy tag                    |
+| urxvt @editor #work  | Open urxvt on view @editor with tag _work_                   |
+| urxvt #work          | Open urxvt and tag with tag _work_                           |
