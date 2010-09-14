@@ -21,3 +21,4 @@ h2. Examples
 | urxvt @editor        | Open urxvt on view @editor with dummy tag                    |
 | urxvt @editor #work  | Open urxvt on view @editor with tag _work_                   |
 | urxvt #work          | Open urxvt and tag with tag _work_                           |
+| urx<hit tab>         | Open urxvt (and not search it with google)                   |
