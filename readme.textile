@@ -1,6 +1,6 @@
 h1. Launcher
 
-Launcher that combines the fancy stuff of "subtle":http://subtle.subforge.org and a browser search bar.
+Launcher that combines the fancy stuff of "subtle":http://subtle.subforge.org and a browser search bar. Extracted from "the original repo":http://subforge.org/projects/subtle-contrib/wiki
 
 h2. Features
 
