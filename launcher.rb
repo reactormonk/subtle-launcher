@@ -72,8 +72,8 @@ module Launcher
           :width => 1, :height => 1) do |w|
         w.name         = "Launcher: Input"
         w.font         = "xft:Envy Code R:pixelsize=80"
-        w.foreground   = Subtlext::Subtle.colors[:fg_focus]
-        w.background   = Subtlext::Subtle.colors[:bg_focus]
+        w.foreground   = Subtlext::Subtle.colors[:focus_fg]
+        w.background   = Subtlext::Subtle.colors[:focus_bg]
         w.border_size  = 0
       end
 
@@ -99,8 +99,8 @@ module Launcher
           :width => 1, :height => 1) do |w|
         w.name        = "Launcher: Info"
         w.font        = "xft:Envy Code R:pixelsize=12"
-        w.foreground  = Subtlext::Subtle.colors[:fg_panel]
-        w.background  = Subtlext::Subtle.colors[:bg_panel]
+        w.foreground  = Subtlext::Subtle.colors[:panel_fg]
+        w.background  = Subtlext::Subtle.colors[:panel_bg]
         w.border_size = 0
       end
 
