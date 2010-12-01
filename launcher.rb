@@ -5,9 +5,19 @@
 # @copyright (c) 2010, Christoph <Kappel unexist@dorfelite.net>
 # @version $Id$
 #
+# Launcher that combines the tagging of subtle and a browser search bar.
+#
+# Examples:
+#
+# subtle wm           - Change to browser view and search for 'subtle wm' via Google
+# urxvt @editor       - Open urxvt on view @editor with dummy tag
+# urxvt @editor #work - Open urxvt on view @editor with tag #work
+# urxvt #work         - Open urxvt and tag with tag #work
+# urx<Tab>            - Open urxvt (tab completion)
+#
 
 begin
-  require "subtle/subtlext" unless defined?(Subtle)
+  require "subtle/subtlext"
   require_relative "levenshtein.rb"
 rescue LoadError => err
   puts ">>> ERROR: Missing dependencies"
@@ -19,11 +29,12 @@ require "singleton"
 require "uri"
 
 module Launcher
-  RE_COMMAND  = /(@|\#)[a-z0-9]+/
-  RE_URI      = /^(http|https):\/\/[a-z0-9]+([\-\.]{1}[a-z0-9]+)*\.[a-z]{2,5}(([0-9]{1,5})?\/.*)?$/ix
-  RE_CHROME   = /chrom[e|ium]|iron/
-  RE_FIREFOX  = /navigator/
-  RE_OPERA    = /opera/
+  # Precompile regexps
+  RE_COMMAND  = Regexp.new(/^([A-Za-z0-9]+)([ ][@#][A-Za-z0-9]+)*$/)
+  RE_URI      = Regexp.new(/^(http|https):\/\/[a-z0-9]+([\-\.]{1}[a-z0-9]+)*\.[a-z]{2,5}(([0-9]{1,5})?\/.*)?$/ix)
+  RE_CHROME   = Regexp.new(/chrom[e|ium]|iron/i)
+  RE_FIREFOX  = Regexp.new(/navigator/i)
+  RE_OPERA    = Regexp.new(/opera/i)
 
   # Launcher class
   class Launcher
@@ -126,10 +137,10 @@ module Launcher
         @candidate = URI.parse(string)
 
         info("Goto %s" % [ @candidate.to_s ])
-      elsif(RE_COMMAND.match(string) or @completed)
+      elsif(RE_COMMAND.match(string))
         @candidate = string
 
-        info("Launcher")
+        info("Launch %s" % [ string ])
       else
         @candidate = URI.parse("http://www.google.com/#q=%s" % [
            URI.escape(string)
@@ -206,7 +217,7 @@ module Launcher
     end # }}}
 
     ## show {{{
-    # Show gleebox
+    # Show launcher
     ##
 
     def show
@@ -231,7 +242,7 @@ module Launcher
 
     def run
       show
-      ret = @input.read(2, @height - 25, 18)
+      ret = @input.read(2, @height - 25, @width / 45)
       hide
 
       # Check if input returns a value
@@ -252,31 +263,31 @@ module Launcher
             end
 
             # Add an ad-hoc tag if we don't have any
-            if(not @candidate.empty? and tags.empty? and
-                (not spawn.empty? or not views.empty?))
+            if(views.any? and spawn.any? and tags.empty?)
               tags << rand(1337).to_s
             end
 
-            tags.each do |t|
-              # Find or create tag
+            # Find or create tags
+            tags.map! do |t|
               tag = Subtlext::Tag[t] || Subtlext::Tag.new(t)
               tag.save
 
-              # Spawn app and tag it
-              spawn.each do |s|
-                pid = Subtlext::Subtle.spawn(s)
+              tag
+            end
 
-                sleep 1 #< Wait for client to appear
+            # Find or create view and add tag
+            views.each do |v|
+              view = Subtlext::View[v] || Subtlext::View.new(v)
+              view.save
 
-                Subtlext::Client[:pid => pid].tag(tag) unless(pid.nil?)
-              end
+              view.tag(tags) unless(view.nil?)
+            end
 
-              # Find or create view and add tag
-              views.each do |v|
-                view = Subtlext::View[v] || Subtlext::View.new(v)
-                view.save
-                view.tag(tag)
-              end
+            # Spawn app and tag it
+            spawn.each do |s|
+              c = Subtlext::Subtle.spawn(s)
+
+              c.tags = tags unless(c.nil?)
             end # }}}
           when URI # {{{
             find_browser
@@ -286,13 +297,7 @@ module Launcher
               # Select browser
               case @browser
                 when :chrome
-                  # TODO use chromer
-                  tries = ["chromium", "iron", "chrome"]
-                  begin
-                    system("#{tries.shift} %s" % [ @candidate.to_s ]) or raise "Chrome Browser not found"
-                  rescue
-                    retry unless tries.empty?
-                  end
+                  system("chromium '%s'" % [ @candidate.to_s ])
                 when :firefox
                   system("firefox -new-tab '%s'" % [ @candidate.to_s ])
                 when :opera
