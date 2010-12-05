@@ -16,21 +16,27 @@
 # urx<Tab>            - Open urxvt (tab completion)
 #
 
-begin
-  require "subtle/subtlext"
-  require_relative "levenshtein.rb"
-rescue LoadError => err
-  puts ">>> ERROR: Missing dependencies"
-  puts "           %s" % [ err ]
-  exit
-end
-
 require "singleton"
 require "uri"
 
+begin
+  require "subtle/subtlext"
+rescue LoadError
+  puts ">>> ERROR: Couldn't find subtlext"
+  exit
+end
+
+begin
+  require_relative "levenshtein.rb"
+rescue LoadError => err
+  puts ">>> ERROR: Couldn't find `levenshtein.rb'"
+  exit
+end
+
+# Launcher module
 module Launcher
   # Precompile regexps
-  RE_COMMAND  = Regexp.new(/^([A-Za-z0-9]+)([ ][@#][A-Za-z0-9]+)*$/)
+  RE_COMMAND  = Regexp.new(/^([A-Za-z0-9-]+)([ ][@#][A-Za-z0-9-]+)*$/)
   RE_URI      = Regexp.new(/^(http|https):\/\/[a-z0-9]+([\-\.]{1}[a-z0-9]+)*\.[a-z]{2,5}(([0-9]{1,5})?\/.*)?$/ix)
   RE_CHROME   = Regexp.new(/chrom[e|ium]|iron/i)
   RE_FIREFOX  = Regexp.new(/navigator/i)
@@ -280,14 +286,14 @@ module Launcher
               view = Subtlext::View[v] || Subtlext::View.new(v)
               view.save
 
-              view.tag(tags) unless(view.nil?)
+              view.tag(tags) unless(view.nil? or tags.empty?)
             end
 
             # Spawn app and tag it
             spawn.each do |s|
               c = Subtlext::Subtle.spawn(s)
 
-              c.tags = tags unless(c.nil?)
+              c.tags = tags unless(c.nil? or tags.empty?)
             end # }}}
           when URI # {{{
             find_browser
@@ -357,3 +363,5 @@ end
 if(__FILE__ == $0)
   Launcher::Launcher.instance.run
 end
+
+# vim:ts=2:bs=2:sw=2:et:fdm=marker
