@@ -2,8 +2,8 @@
 #
 # @file Launcher
 #
-# @copyright (c) 2010, Christoph <Kappel unexist@dorfelite.net>
-# @version $Id$
+# @copyright (c) 2010, Christoph Kappel <unexist@dorfelite.net>
+# @version $Id: ruby/launcher.rb,v 63 2010/12/19 00:27:45 unexist $
 #
 # Launcher that combines the tagging of subtle and a browser search bar.
 #
@@ -116,8 +116,8 @@ module Launcher
           :width => 1, :height => 1) do |w|
         w.name        = "Launcher: Info"
         w.font        = "xft:Envy Code R:pixelsize=12"
-        w.foreground  = Subtlext::Subtle.colors[:panel_fg]
-        w.background  = Subtlext::Subtle.colors[:panel_bg]
+        w.foreground  = Subtlext::Subtle.colors[:stipple]
+        w.background  = Subtlext::Subtle.colors[:panel]
         w.border_size = 0
       end
 
