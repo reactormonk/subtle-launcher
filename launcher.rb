@@ -2,18 +2,29 @@
 #
 # @file Launcher
 #
-# @copyright (c) 2010, Christoph Kappel <unexist@dorfelite.net>
-# @version $Id: ruby/launcher.rb,v 63 2010/12/19 00:27:45 unexist $
+# @copyright (c) 2010-2011, Christoph Kappel <unexist@dorfelite.net>
+# @version $Id: ruby/launcher.rb,v 91 2011/04/19 17:40:01 unexist $
 #
-# Launcher that combines the tagging of subtle and a browser search bar.
+# This program can be distributed under the terms of the GNU GPLv2.
+# See the file COPYING for details.
+#
+# Launcher that combines modes/tagging of subtle and a browser search bar
+#
+# Thanks, fauno, for your initial work!
 #
 # Examples:
 #
-# subtle wm           - Change to browser view and search for 'subtle wm' via Google
-# urxvt @editor       - Open urxvt on view @editor with dummy tag
-# urxvt @editor #work - Open urxvt on view @editor with tag #work
-# urxvt #work         - Open urxvt and tag with tag #work
-# urx<Tab>            - Open urxvt (tab completion)
+# g subtle wm           - Change to browser view and search for 'subtle wm' via Google
+# urxvt @editor         - Open urxvt on view @editor with random tag
+# urxvt @editor #work   - Open urxvt on view @editor with tag #work
+# urxvt #work           - Open urxvt and tag with tag #work
+# urxvt -urgentOnBell   - Open urxvt with the urgentOnBell option
+# +urxvt                - Open urxvt and set full mode
+# ^urxvt                - Open urxvt and set floating mode
+# *urxvt                - Open urxvt and set sticky mode
+# urx<Tab>              - Open urxvt (tab completion)
+#
+# http://subforge.org/projects/subtle-contrib/wiki/Launcher
 #
 
 require "singleton"
@@ -26,6 +37,15 @@ rescue LoadError
   exit
 end
 
+# Check for subtlext version
+major, minor, teeny = Subtlext::VERSION.split(".").map(&:to_i)
+if(major == 0 and minor == 9 and 2470 > teeny)
+  puts ">>> ERROR: launcher needs at least subtle `0.9.2470' (found: %s)" % [
+    Subtlext::VERSION
+   ]
+  exit
+end
+
 begin
   require_relative "levenshtein.rb"
 rescue LoadError => err
@@ -33,335 +53,463 @@ rescue LoadError => err
   exit
 end
 
-# Launcher module
-module Launcher
-  # Precompile regexps
-  RE_COMMAND  = Regexp.new(/^([A-Za-z0-9-]+)([ ][@#][A-Za-z0-9-]+)*$/)
-  RE_URI      = Regexp.new(/^(http|https):\/\/[a-z0-9]+([\-\.]{1}[a-z0-9]+)*\.[a-z]{2,5}(([0-9]{1,5})?\/.*)?$/ix)
-  RE_CHROME   = Regexp.new(/chrom[e|ium]|iron/i)
-  RE_FIREFOX  = Regexp.new(/navigator/i)
-  RE_OPERA    = Regexp.new(/opera/i)
+# Launcher class
+module Subtle # {{{
+  module Contrib # {{{
+    # Precompile regexps
+    RE_COMMAND  = Regexp.new(/^([+\^\*]*[A-Za-z0-9_\-\/'"\s]+)(\s[@#][A-Za-z0-9_-]+)*$/)
+    RE_MODES    = Regexp.new(/^([+\^\*]*)([A-Za-z0-9_\-\/'"\s]+)/)
+    RE_SEARCH   = Regexp.new(/^[gs]\s.*/)
+    RE_URI      = Regexp.new(/^(http|https):\/\/[a-z0-9]+([\-\.]{1}[a-z0-9]+)*\.[a-z]{2,5}(([0-9]{1,5})?\/.*)?$/ix)
+    RE_CHROME   = Regexp.new(/chrom[e|ium]|iron/i)
+    RE_FIREFOX  = Regexp.new(/navigator/i)
+    RE_OPERA    = Regexp.new(/opera/i)
 
-  # Launcher class
-  class Launcher
-    include Singleton
+    # Launcher class
+    class Launcher # {{{
+      include Singleton
 
-    ## initialize {{{
-    # Create launcher instance
-    ##
+      # Default values
+      @@font_big   = "-*-*-medium-*-*-*-40-*-*-*-*-*-*-*"
+      @@font_small = "-*-*-medium-*-*-*-14-*-*-*-*-*-*-*"
+      @@paths      = "/usr/bin"
 
-    def initialize
-      @candidate = nil
-      @browser   = nil
-      @view      = nil
-      @completed = false
+      # Singleton methods
 
-      # Cache
-      @cache_tags  = Subtlext::Tag.all.map { |t| t.name }
-      @cache_views = Subtlext::View.all.map { |v| v.name }
-      @cache_apps  = {}
+      ## fonts {{{
+      # Set font strings
+      # @param [Array]  fonts  Fonts array
+      ##
 
-      # Something near a skiplist
-      Dir["/usr/bin/*"].each do |a|
-        file = File.basename(a)
-        sym  = file[0].to_sym
-
-        if(@cache_apps.has_key?(sym))
-          @cache_apps[sym] << file
-        else
-          @cache_apps[sym] = [ file ]
+      def self.fonts=(fonts)
+        if(fonts.is_a?(Array))
+          @@font_big   = fonts.first if(1 <= fonts.size)
+          @@font_small = fonts.last  if(2 <= fonts.size)
         end
-      end
+      end # }}}
 
-      # Init for performance
-      @array1 = Array.new(20, 0)
-      @array2 = Array.new(20, 0)
+      ## paths {{{
+      # Set launcher path separated by colons
+      # @param [String, Array]  paths  Path list separated by colon or array
+      ##
 
-      # Geometry
-      geo     = Subtlext::Screen[0].geometry
-      @width  = geo.width * 80 / 100
-      @height = 90
-      @x      = (geo.width - @width) / 2
-      @y      = (geo.height - @height) - (@height / 2)
-
-      # Create windows
-      @input  = Subtlext::Window.new(:x => 0, :y => 0,
-          :width => 1, :height => 1) do |w|
-        w.name         = "Launcher: Input"
-        w.font         = "xft:Envy Code R:pixelsize=80"
-        w.foreground   = Subtlext::Subtle.colors[:focus_fg]
-        w.background   = Subtlext::Subtle.colors[:focus_bg]
-        w.border_size  = 0
-      end
-
-      # Input handler
-      @input.input do |string|
-        begin
-          Launcher.instance.input(string)
-        rescue => err
-          puts err, err.backtrace
+      def self.paths=(paths)
+        if(paths.is_a?(String))
+          @@paths = paths
+        elsif(paths.is_a?(Array))
+          @@paths = paths.join(":")
         end
-      end
+      end # }}}
 
-      # Completion handler
-      @input.completion do |string, guess|
-        begin
-          Launcher.instance.completion(string, guess)
-        rescue => err
-          puts err, err.backtrace
+      ## run {{{
+      # Run the launcher
+      ##
+
+      def self.run
+        self.instance.run
+      end # }}}
+
+      # Instance methods
+
+      ## initialize {{{
+      # Create launcher instance
+      ##
+
+      def initialize
+        @candidate = nil
+        @browser   = nil
+        @view      = nil
+        @x         = 0
+        @y         = 0
+        @width     = 0
+        @height    = 0
+
+        # Parsed data
+        @parsed_tags  = []
+        @parsed_views = []
+        @parsed_app   = ""
+        @parsed_modes = ""
+
+        # Cached data
+        @cached_tags  = Subtlext::Tag.all.map(&:name)
+        @cached_views = Subtlext::View.all.map(&:name)
+        @cached_apps  = {}
+
+        # Something close to a skiplist
+        @@paths.split(":").each do |path|
+          if(Dir.exist?(path))
+            Dir.foreach(File.expand_path(path)) do |entry|
+              file = File.basename(entry)
+              sym  = file[0].to_sym
+
+              # Sort in
+              if(@cached_apps.has_key?(sym))
+                @cached_apps[sym] << file
+              else
+                @cached_apps[sym] = [ file ]
+              end
+            end
+          else
+            puts ">>> ERROR: Skipping non-existing path `%s'" % [ path ]
+          end
         end
-      end
 
-      @info  = Subtlext::Window.new(:x => 0, :y => 0,
-          :width => 1, :height => 1) do |w|
-        w.name        = "Launcher: Info"
-        w.font        = "xft:Envy Code R:pixelsize=12"
-        w.foreground  = Subtlext::Subtle.colors[:stipple]
-        w.background  = Subtlext::Subtle.colors[:panel]
-        w.border_size = 0
-      end
+        # Init for performance
+        @array1 = Array.new(20, 0)
+        @array2 = Array.new(20, 0)
 
-      move
-      info
-    end # }}}
+        # Get colors
+        colors = Subtlext::Subtle.colors
 
-    ## input {{{
-    # Handle input
-    # @param  [String]]  string  Input string
-    ##
+        # Create input window
+        @input = Subtlext::Window.new(:x => 0, :y => 0,
+            :width => 1, :height => 1) do |w|
+          w.name        = "Launcher: Input"
+          w.font        = @@font_big
+          w.foreground  = colors[:focus_fg]
+          w.background  = colors[:focus_bg]
+          w.border_size = 0
+        end
 
-    def input(string)
-      # Clear info field
-      if(string.empty? or string.nil?)
+        # Get font height and y offset of input window
+        @font_height1 = @input.font_height + 6
+        @font_y1      = @input.font_y
+
+        # Input handler
+        @input.input do |string|
+          begin
+            Launcher.instance.input(string)
+          rescue => err
+            puts err, err.backtrace
+          end
+        end
+
+        # Completion handler
+        @input.completion do |string, guess|
+          begin
+            Launcher.instance.completion(string, guess)
+          rescue => err
+            puts err, err.backtrace
+          end
+        end
+
+        # Create info window
+        @info  = Subtlext::Window.new(:x => 0, :y => 0,
+            :width => 1, :height => 1) do |w|
+          w.name        = "Launcher: Info"
+          w.font        = @@font_small
+          w.foreground  = colors[:stipple]
+          w.background  = colors[:panel_top]
+          w.border_size = 0
+        end
+
+        # Get font height and y offset of info window
+        @font_height2 = @info.font_height + 6
+        @font_y2      = @info.font_y
+
         info
-        @completed = false
-        return
-      end
+      end # }}}
 
-      # Check input
-      if(RE_URI.match(string))
-        @candidate = URI.parse(string)
+      ## input {{{
+      # Handle input
+      # @param  [String]]  string  Input string
+      ##
 
-        info("Goto %s" % [ @candidate.to_s ])
-      elsif(RE_COMMAND.match(string))
-        @candidate = string
-
-        info("Launch %s" % [ string ])
-      else
-        @candidate = URI.parse("http://www.google.com/#q=%s" % [
-           URI.escape(string)
-        ])
-
-        info("Goto %s" % [ @candidate.to_s ])
-      end
-    end # }}}
-
-    ## completion {{{
-    # Complete string
-    # @param  [String]  string  String to match
-    # @param  [Fixnum]  guess   Number of guess
-    ##
-
-    def completion(string, guess)
-      begin
-        guesses = []
-        lookup = nil
-
+      def input(string)
         # Clear info field
         if(string.empty? or string.nil?)
           info
-          @completed = false
           return
         end
 
-        @completed = true
+        # Check input
+        if(RE_URI.match(string))
+          @candidate = URI.parse(string)
 
-        # Select lookup cache
-        last = string.split(" ").last rescue string
-        if(last.start_with?("#"))
-          lookup = @cache_tags
-          prefix = "#"
-        elsif(last.start_with?("@"))
-          lookup = @cache_views
-          prefix = "@"
-        else
-          lookup = @cache_apps[last[0].to_sym]
-          prefix = ""
-        end
+          info("Goto %s" % [ @candidate.to_s ])
+        elsif(RE_SEARCH.match(string))
+          @candidate = URI.parse("http://www.google.com/#q=%s" % [
+            URI.escape(string.gsub(/^[gs]\s/, ''))
+          ])
 
-        # Collect guesses
-        unless(lookup.nil?)
-          lookup.each do |l|
-            guesses << [
-              "%s%s" %[ prefix, l ],
-              Levenshtein::distance(last.gsub(/^[@#]/, ""),
-                l, 1, 5, 5, @array1, @array2)
-            ]
+          info("Goto %s" % [ @candidate.to_s ])
+        elsif(RE_COMMAND.match(string))
+          @candidate    = string
+          @parsed_tags  = []
+          @parsed_views = []
+          @parsed_app   = ""
+          @parsed_modes = ""
+
+          # Parse args
+          @candidate.split.each do |arg|
+            case arg[0]
+              when "#" then @parsed_tags  << arg[1..-1]
+              when "@" then @parsed_views << arg[1..-1]
+              when "+", "^", "*"
+                app, @parsed_modes, @parsed_app = RE_MODES.match(arg).to_a
+              else
+                if @parsed_app.empty?
+                  @parsed_app += arg
+                else
+                  @parsed_app += " " + arg
+                end
+            end
           end
 
-          guesses.sort! { |a, b| a[1] <=> b[1] } # Sort for costs
+          # Add an ad-hoc tag if we don't have any and need one
+          if(@parsed_views.any? and not @parsed_app.empty? and
+              @parsed_tags.empty?)
+            @parsed_tags << "tag_%d" % [ rand(1337) ]
+          end
 
-          @candidate = guesses[guess].first
+          if(@parsed_views.any?)
+            info("Launch %s%s on %s (via %s)" % [
+              modes2text(@parsed_modes),
+              @parsed_app,
+              @parsed_views.join(", "),
+              @parsed_tags.join(", ")
+            ])
+          elsif(@parsed_tags.any?)
+            info("Launch %s%s (via %s)" % [
+              modes2text(@parsed_modes),
+              @parsed_app,
+              @parsed_tags.join(", ")
+            ])
+          else
+            info("Launch %s%s" % [ modes2text(@parsed_modes), @parsed_app ])
+          end
         end
-      rescue => err
-        puts err, err.backtrace
-      end
-    end # }}}
+      end # }}}
 
-    ## move {{{
-    # Move gleebox windows to x/y
-    # @param  [Fixnum]  x  X position
-    # @param  [Fixnum]  y  Y position
-    ##
+      ## completion {{{
+      # Complete string
+      # @param  [String]  string  String to match
+      # @param  [Fixnum]  guess   Number of guess
+      ##
 
-    def move(x = @x, y = @y)
-      @x = x
-      @y = y
+      def completion(string, guess)
+        begin
+          guesses = []
+          lookup = nil
 
-      @input.geometry = [ @x, @y, @width, @height ]
-      @info.geometry  = [ @x, @y + @height, @width, 20 ]
-    end # }}}
+          # Clear info field
+          if(string.empty? or string.nil?)
+            info
+            return
+          end
 
-    ## show {{{
-    # Show launcher
-    ##
+          # Select lookup cache
+          last = string.split(" ").last rescue string
+          case(last[0])
+            when "#"
+              lookup = @cached_tags
+              prefix = "#"
+            when "@"
+              lookup = @cached_views
+              prefix = "@"
+            when "+", "^", "*"
+              lookup = @cached_apps[last[@parsed_modes.size].to_sym]
+              prefix = @parsed_modes
+            else
+              lookup = @cached_apps[last[0].to_sym]
+              prefix = ""
+          end
 
-    def show
-      @input.show
-      @info.show
+          # Collect guesses
+          unless(lookup.nil?)
+            lookup.each do |l|
+              guesses << [
+                "%s%s" %[ prefix, l ],
+                Levenshtein::distance(last.gsub(/^[@#]/, ""),
+                  l, 1, 5, 5, @array1, @array2)
+              ]
+            end
 
-      info
-    end # }}}
+            guesses.sort! { |a, b| a[1] <=> b[1] } # Sort by distance
 
-    ## hide # {{{
-    # Hide gleebox
-    ##
+            @candidate = guesses[guess].first
+          end
+        rescue => err
+          puts err, err.backtrace
+        end
+      end # }}}
 
-    def hide
-      @input.hide
-      @info.hide
-    end # }}}
+      ## move {{{
+      # Move launcher windows to current screen
+      ##
 
-    ## run {{{
-    # Show and run gleebox
-    ##
+      def move
+        # Geometry
+        geo    = Subtlext::Screen.current.geometry
+        @width  = geo.width * 80 / 100
+        @x      = geo.x + ((geo.width - @width) / 2)
+        @y      = geo.y + geo.height - @font_height1 - @font_height2 - 40
 
-    def run
-      show
-      ret = @input.read(2, @height - 25, @width / 45)
-      hide
+        @input.geometry = [ @x, @y, @width, @font_height1 ]
+        @info.geometry  = [ @x, @y + @font_height1, @width, @font_height2 ]
+      end # }}}
 
-      # Check if input returns a value
-      unless(ret.nil?)
-        case @candidate
-          when String # {{{
-            tags  = []
-            views = []
-            spawn = []
+      ## show {{{
+      # Show launcher
+      ##
 
-            # Parse args
-            @candidate.split.each do |arg|
-              case arg[0]
-                when "#" then tags  << arg[1..-1]
-                when "@" then views << arg[1..-1]
-                else          spawn << arg
+      def show
+        move
+
+        @input.show
+        @info.show
+
+        info
+      end # }}}
+
+      ## hide # {{{
+      # Hide launcher
+      ##
+
+      def hide
+        @input.hide
+        @info.hide
+      end # }}}
+
+      ## run {{{
+      # Show and run launcher
+      ##
+
+      def run
+        show
+        ret = @input.read(2, @font_y1, @width / 45)
+        hide
+
+        # Check if input returns a value
+        unless(ret.nil?)
+          case @candidate
+            when String # {{{
+              # Find or create tags
+              @parsed_tags.map! do |t|
+                tag = Subtlext::Tag[t] || Subtlext::Tag.new(t)
+                tag.save
+
+                tag
               end
-            end
 
-            # Add an ad-hoc tag if we don't have any
-            if(views.any? and spawn.any? and tags.empty?)
-              tags << rand(1337).to_s
-            end
+              # Find or create view and add tag
+              @parsed_views.each do |v|
+                view = Subtlext::View[v] || Subtlext::View.new(v)
+                view.save
 
-            # Find or create tags
-            tags.map! do |t|
-              tag = Subtlext::Tag[t] || Subtlext::Tag.new(t)
-              tag.save
+                view.tag(@parsed_tags) unless(view.nil? or @parsed_tags.empty?)
+              end
 
-              tag
-            end
+              # Spawn app, tag it and set modes
+              unless((client = Subtlext::Subtle.spawn(@parsed_app)).nil?)
+                client.tags  = @parsed_tags unless(@parsed_tags.empty?)
 
-            # Find or create view and add tag
-            views.each do |v|
-              view = Subtlext::View[v] || Subtlext::View.new(v)
-              view.save
+                # Set modes
+                unless(@parsed_modes.empty?)
+                  flags = []
 
-              view.tag(tags) unless(view.nil? or tags.empty?)
-            end
+                  # Translate modes
+                  @parsed_modes.each_char do |c|
+                    case c
+                      when "+" then flags << :full
+                      when "^" then flags << :float
+                      when "*" then flags << :stick
+                    end
+                  end
 
-            # Spawn app and tag it
-            spawn.each do |s|
-              c = Subtlext::Subtle.spawn(s)
+                  client.flags = flags
+                end
+              end # }}}
+            when URI # {{{
+              find_browser
+              unless(@browser.nil?)
+                @view.jump
 
-              c.tags = tags unless(c.nil? or tags.empty?)
-            end # }}}
-          when URI # {{{
-            find_browser
-            unless(@browser.nil?)
-              @view.jump
+                # Select browser
+                case @browser
+                  when :chrome
+                    system("chromium '%s'" % [ @candidate.to_s ])
+                  when :firefox
+                    system("firefox -new-tab '%s'" % [ @candidate.to_s ])
+                  when :opera
+                    system("opera -remote 'openURL(%s)'" % [ @candidate.to_s ])
+                  else
+                    puts ">>> ERROR: Unsupported browser"
+                    return
+                end
+              end # }}}
+          end
+        end
 
-              # Select browser
-              case @browser
-                when :chrome
-                  system("chromium '%s'" % [ @candidate.to_s ])
-                when :firefox
-                  system("firefox -new-tab '%s'" % [ @candidate.to_s ])
-                when :opera
-                  system("opera -remote 'openURL(%s)'" % [ @candidate.to_s ])
-                else
-                  puts ">>> ERROR: Unsupported browser"
+        @candidate = nil
+      end # }}}
+
+      private
+
+      def modes2text(modes) # {{{
+        ret = []
+
+        # Collect mode verbs
+        modes.each_char do |c|
+          case c
+            when "+" then ret << "full"
+            when "^" then ret << "floating"
+            when "*" then ret << "sticky"
+          end
+        end
+
+        ret.any? ? "%s " % [ ret.join(", ") ] : ""
+      end # }}}
+
+      def find_browser # {{{
+        begin
+          if(@browser.nil?)
+            Subtlext::Client.all.each do |c|
+              case c.instance
+                when RE_CHROME
+                  @browser = :chrome
+                  @view    = c.views.first
+                  return
+                when RE_FIREFOX
+                  @browser = :firefox
+                  @view    = c.views.first
+                  return
+                when RE_OPERA
+                  @browser = :opera
+                  @view    = c.views.first
                   return
               end
-            end # }}}
-        end
-      end
-
-      @candidate = nil
-      @completed = false
-    end # }}}
-
-    private
-
-    def find_browser # {{{
-      begin
-        if(@browser.nil?)
-          Subtlext::Client.all.each do |c|
-            case c.instance
-              when RE_CHROME
-                @browser = :chrome
-                @view    = c.views.first
-                return
-              when RE_FIREFOX
-                @browser = :firefox
-                @view    = c.views.first
-                return
-              when RE_OPERA
-                @browser = :opera
-                @view    = c.views.first
-                return
             end
+
+            puts ">>> ERROR: No supported browser found"
+            puts "           (Supported: Chrome, Firefox and Opera)"
           end
-
-          puts ">>> ERROR: No supported browser found"
-          puts "           (Supported: Chrome, Firefox and Opera)"
+        rescue
+          @browser = nil
+          @view    = nil
         end
-      rescue
-        @browser = nil
-        @view    = nil
-      end
-    end # }}}
+      end # }}}
 
-    # info {{{
-    def info(string = nil)
-      @info.write(2, 15, string || "Nothing selected")
-      @info.redraw
+      def info(string = "Nothing selected") # {{{
+        @info.write(2, @font_y2, string)
+        @info.redraw
+      end # }}}
     end # }}}
-  end
-end
+  end # }}}
+end # }}}
 
 # Implicitly run
 if(__FILE__ == $0)
-  Launcher::Launcher.instance.run
+  # Set fonts
+  #Subtle::Contrib::Launcher.fonts = [
+  #  "xft:DejaVu Sans Mono:pixelsize=80:antialias=true",
+  #  "xft:DejaVu Sans Mono:pixelsize=12:antialias=true"
+  #]
+
+  # Set paths
+  # Subtle::Contrib::Launcher.paths = [ "/usr/bin", "~/bin" ]
+
+  Subtle::Contrib::Launcher.run
 end
 
 # vim:ts=2:bs=2:sw=2:et:fdm=marker
